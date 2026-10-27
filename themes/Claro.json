@@ -1,0 +1,14 @@
+{
+  "name": "Claro",
+  "background": "#EEF2F6",
+  "panel": "#FFFFFF",
+  "input": "#F8FAFC",
+  "text": "#172B41",
+  "muted": "#516579",
+  "border": "#C8D3DF",
+  "accent": "#087E70",
+  "accent_text": "#FFFFFF",
+  "rx": "#08705B",
+  "tx": "#245FB1",
+  "error": "#B42332"
+}

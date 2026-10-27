@@ -1,0 +1,14 @@
+{
+  "name": "Oscuro",
+  "background": "#101720",
+  "panel": "#17212E",
+  "input": "#0D141D",
+  "text": "#E4ECF5",
+  "muted": "#93A4B8",
+  "border": "#334256",
+  "accent": "#59D4BB",
+  "accent_text": "#09251F",
+  "rx": "#74DCC6",
+  "tx": "#8DBBFF",
+  "error": "#FF9090"
+}

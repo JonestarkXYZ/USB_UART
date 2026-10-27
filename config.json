@@ -1,0 +1,32 @@
+{
+  "show_console": false,
+  "serial": {
+    "port": "COM3",
+    "baudrate": 115200,
+    "data_bits": 8,
+    "parity": "Ninguna",
+    "stop_bits": "1",
+    "flow_control": "Ninguno"
+  },
+  "terminal": {
+    "tx_mode": "UTF-8",
+    "rx_mode": "UTF-8",
+    "line_ending": "Ninguno",
+    "timestamp": "Ninguna",
+    "history_limit": 1000
+  },
+  "view": {
+    "theme": "Oscuro",
+    "font_family": "Consolas",
+    "font_size": 11,
+    "bold": false,
+    "italic": false,
+    "word_wrap": true,
+    "autoscroll": true
+  },
+  "window": {
+    "width": 1180,
+    "height": 760,
+    "maximized": true
+  }
+}

@@ -1,0 +1,62 @@
+# Bytecode y caches de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+environments/windows/
+environments/linux/
+
+# Paquetes y resultados de compilacion
+build/
+dist/
+downloads/
+*.egg-info/
+.eggs/
+*.egg
+wheels/
+
+# Pruebas, cobertura y analizadores
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+coverage.xml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Registros y archivos temporales de ejecucion
+logs/
+*.log
+*.tmp
+*.temp
+
+# Copias de seguridad generadas localmente
+backups/
+*.bak
+
+# Variables de entorno y secretos locales
+.env
+.env.*
+!.env.example
+
+# Configuracion local de editores e IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+Desktop.ini
