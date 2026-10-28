@@ -7,6 +7,8 @@ from collections import deque
 from PySide6.QtCore import QIODevice, QObject, QTimer, Signal
 from PySide6.QtSerialPort import QSerialPort
 
+from virtual_serial import VirtualSerialPort
+
 
 class SerialTransport(QObject):
     """Notifica TX al confirmar el controlador los bytes, no al pulsar Enviar."""
@@ -19,20 +21,36 @@ class SerialTransport(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.port = QSerialPort(self)
-        self.port.setReadBufferSize(262144)
+        self.physical_port = QSerialPort(self)
+        self.virtual_port = VirtualSerialPort(self)
+        self.port = self.physical_port
         self.pending = deque()
         self.pending_bytes = 0
         self.opening = False
-        self.port.readyRead.connect(self._read)
-        self.port.bytesWritten.connect(self._written)
-        self.port.errorOccurred.connect(self._error)
+        self.debug = False
+        # Ambos adaptadores usan los mismos eventos, cola y lectura del transporte.
+        for port in (self.physical_port, self.virtual_port):
+            port.setReadBufferSize(262144)
+            port.readyRead.connect(self._read)
+            port.bytesWritten.connect(self._port_written)
+            port.errorOccurred.connect(self._error)
+
+    def is_open(self) -> bool:
+        """Consulta la conexión activa sin confundir TEST con el QSerialPort físico."""
+        return self.port.isOpen()
+
+    def set_debug(self, enabled: bool) -> None:
+        """Al cambiar de modo cierra la conexión anterior y cancela sus envíos pendientes."""
+        if self.debug != enabled:
+            self.close()
+            self.debug = enabled
+            self.port = self.virtual_port if enabled else self.physical_port
 
     def open(self, settings: dict) -> bool:
         """Verifica todos los parámetros; el controlador puede rechazar combinaciones."""
         self.close()
         self.opening = True
-        self.port.setPortName(settings["port"])
+        self.port.setPortName("TEST" if self.debug else settings["port"])
         parity = {"Ninguna": QSerialPort.NoParity, "Par": QSerialPort.EvenParity, "Impar": QSerialPort.OddParity, "Marca": QSerialPort.MarkParity, "Espacio": QSerialPort.SpaceParity}
         stop = {"1": QSerialPort.OneStop, "1.5": QSerialPort.OneAndHalfStop, "2": QSerialPort.TwoStop}
         flow = {"Ninguno": QSerialPort.NoFlowControl, "RTS/CTS": QSerialPort.HardwareControl, "XON/XOFF": QSerialPort.SoftwareControl}
@@ -46,7 +64,8 @@ class SerialTransport(QObject):
         opened = valid and self.port.open(QIODevice.ReadWrite)
         self.opening = False
         if not opened:
-            self.failed.emit(f"No se pudo abrir {settings['port']}: {self.port.errorString()}")
+            name = "TEST" if self.debug else settings["port"]
+            self.failed.emit(f"No se pudo abrir {name}: {self.port.errorString()}")
         self.connected.emit(bool(opened))
         return bool(opened)
 
@@ -59,14 +78,17 @@ class SerialTransport(QObject):
             self.port.close()
         self.connected.emit(False)
         if discarded:
-            self.failed.emit(f"Conexión cerrada con {discarded} bytes TX sin confirmar; podrían haberse enviado parcialmente.")
+            if self.debug:
+                self.failed.emit(f"Se cancelaron {discarded} bytes pendientes del eco TEST.")
+            else:
+                self.failed.emit(f"Conexión cerrada con {discarded} bytes TX sin confirmar; podrían haberse enviado parcialmente.")
 
     def send(self, payload: bytes) -> bool:
         """Limita la cola para impedir crecimiento de memoria con control de flujo."""
         if not payload:
             self.failed.emit("El envío debe contener al menos un byte.")
             return False
-        if not self.port.isOpen():
+        if not self.is_open():
             self.failed.emit("Conecte un puerto antes de enviar.")
             return False
         if self.pending_bytes + len(payload) > self.MAX_PENDING:
@@ -80,6 +102,11 @@ class SerialTransport(QObject):
             self.failed.emit("El controlador no aceptó el envío completo. Revise la conexión.")
             return False
         return True
+
+    def _port_written(self, count: int) -> None:
+        """Descarta eventos tardíos de un adaptador que dejó de ser el activo."""
+        if self.sender() is self.port:
+            self._written(count)
 
     def _written(self, count: int) -> None:
         """Una señal puede confirmar parte de un envío o varios envíos juntos."""
@@ -105,6 +132,8 @@ class SerialTransport(QObject):
 
     def _error(self, error: QSerialPort.SerialPortError) -> None:
         """Cierra al perder el USB o ante fallos de E/S; la reapertura es manual."""
+        if self.sender() is not None and self.sender() is not self.port:
+            return
         if self.opening or not self.port.isOpen() or error == QSerialPort.NoError:
             return
         if error in (QSerialPort.ResourceError, QSerialPort.DeviceNotFoundError, QSerialPort.PermissionError, QSerialPort.ReadError, QSerialPort.WriteError):

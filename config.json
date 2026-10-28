@@ -13,7 +13,8 @@
     "rx_mode": "UTF-8",
     "line_ending": "CRLF",
     "timestamp": "Ninguna",
-    "history_limit": 1000
+    "history_limit": 1000,
+    "interpret_controls": false
   },
   "view": {
     "theme": "Oscuro",

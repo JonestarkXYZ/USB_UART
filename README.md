@@ -26,6 +26,20 @@ Si el entorno ya está preparado, también se puede iniciar directamente:
 
 Con el foco en el cuadro de envío, **↑** recupera el último texto enviado y sigue hacia los anteriores; **↓** avanza hacia los más recientes. Al bajar después del último se recupera el borrador que estaba escrito antes de recorrer el historial. Puede editar una entrada recuperada y enviarla otra vez con Enter o Enviar. Se conservan los últimos **100 envíos aceptados por formato durante la sesión**, sin incluir intentos fallidos ni finales de línea añadidos. Recorrerlos no envía nada. La papelera del historial RX/TX no borra estas entradas.
 
+## Debug: USB virtual TEST
+
+Active **Configuración → Debug · USB virtual TEST (eco)**. Si hay una conexión COM abierta, se cierra antes de conectar automáticamente a TEST. Mientras Debug está activo, el selector solo ofrece TEST y no se enumeran ni se abren los COM físicos. Desactivar Debug desconecta TEST y vuelve a mostrar los COM; hay que pulsar Conectar para abrir un dispositivo real. Se conserva el último COM seleccionado.
+
+TEST usa el **mismo transporte de la aplicación** que el COM: apertura con parámetros UART, cola TX de 256 KiB, `write`, confirmaciones parciales `bytesWritten`, señal `readyRead`, lectura mediante `read`, historial y contadores. El adaptador interno devuelve lo recibido en orden, en bloques de hasta 64 bytes, incluyendo CR/LF. El eco es asíncrono: no aparece al pulsar Enviar, sino cuando se procesa la transferencia. Al desconectar se cancelan los bytes pendientes y no aparecen ecos de conexiones anteriores.
+
+El retardo se calcula según baudios y longitud de trama: `1 bit de inicio + bits de datos + paridad opcional + bits de parada`. Por ejemplo, 8N1 usa 10 bits por carácter. Los temporizadores de Qt aproximan el tiempo a milisegundos; no es una simulación eléctrica exacta. Con 5, 6 o 7 bits de datos se descartan los bits superiores que la trama no puede transportar; con 8 bits se conserva cada byte. Para cambiar los parámetros, pulse Desconectar, ajuste la UART y vuelva a conectar TEST.
+
+Este es un **puerto virtual interno**, disponible en esta aplicación; no instala un controlador ni crea un COM visible para PuTTY u otros programas. Permite probar el flujo de la terminal, pero no valida el controlador USB, fallos eléctricos, errores de paridad ni señales externas RTS/CTS o XON/XOFF. El modo se guarda como `debug` en `config.json`; si queda activado, la aplicación vuelve a conectar TEST al iniciar.
+
+Prueba rápida: active Debug, seleccione RX/TX en Hexadecimal y envíe `00 48 69 FF`. Con 8 bits de datos y «Final de envío: Ninguno», RX debe devolver `00 48 69 FF`. Cambie los formatos o active «Interpretar controles» para verificar el visor sin hardware.
+
+## Formatos
+
 | Formato | Entrada | Bytes transmitidos |
 |---|---|---|
 | UTF-8 | `Hola ñ` | `48 6F 6C 61 20 C3 B1` |
@@ -51,7 +65,7 @@ El historial conserva bloques de lectura/escritura, **no mensajes definidos por 
 ## Menús y archivos
 
 - **Archivo:** guardar el historial visible como texto UTF-8 (`Ctrl+S`), copiar selección del historial (`Ctrl+Shift+C`), seleccionar todo el historial (`Ctrl+Shift+A`) y salir (`Ctrl+Q`). `Ctrl+C` sigue funcionando normalmente en el cuadro de envío y en el historial.
-- **Configuración:** actualizar puertos (`F5`), cambiar el límite del historial, mostrar consola al iniciar y guardar preferencias.
+- **Configuración:** activar/desactivar Debug con eco TEST, actualizar puertos (`F5`), cambiar el límite del historial, mostrar consola al iniciar y guardar preferencias.
 - **Vista:** fuente, estilo y tamaño (`Ctrl+Shift+F`), aumentar/reducir tamaño, ajuste de línea, desplazamiento automático y temas claro/oscuro. Estas opciones afectan al texto mostrado. La papelera y `Ctrl+L` eliminan el historial y reinician contadores.
 
 El desplazamiento automático sigue las nuevas filas mientras esté al final; al subir para consultar el historial se pausa hasta volver al final. Por defecto se conservan 1000 registros, de hasta 4096 bytes cada uno; al alcanzar el límite se descartan los más antiguos. El límite configurable es de 100 a 10000 registros y también limita los párrafos visibles, ya que un bloque puede contener muchos LF. Para acotar el coste del visor, una línea interpretada sin terminadores se divide en otra fila si supera 32768 caracteres. Los contadores abarcan la sesión desde el último borrado, incluso si ya se descartaron registros antiguos. Cambiar a binario aumenta el uso de memoria por su representación de ocho dígitos por byte.
@@ -68,6 +82,7 @@ Las paletas están en **`themes/Oscuro.json`** y **`themes/Claro.json`**. Se pue
 | `src/main.py` | Inicio de QApplication. |
 | `src/window.py` | Ventana, validadores, menús e historial. |
 | `src/transport.py` | Comunicación asíncrona, cola TX acotada y errores UART. |
+| `src/virtual_serial.py` | Adaptador TEST con eco por bloques y temporización de trama UART. |
 | `src/protocol.py` | Conversiones de bytes y decodificación UTF-8 incremental. |
 | `src/settings.py` | Validación y persistencia de configuración. |
 | `tests/test_terminal.py` | Pruebas sin hardware. |
@@ -81,7 +96,7 @@ Las paletas están en **`themes/Oscuro.json`** y **`themes/Claro.json`**. Se pue
 .\environments\windows\Scripts\python.exe scripts\preview.py
 ```
 
-Las capturas se generan en `docs/preview_oscuro.png` y `docs/preview_claro.png`; el script usa configuración temporal y no abre puertos. Las pruebas verifican conversiones, entradas inválidas, escritura confirmada parcialmente mediante un controlador simulado, desconexión, teclado, historial y configuración. **No sustituyen una prueba UART física.**
+Las capturas se generan en `docs/preview_oscuro.png`, `docs/preview_claro.png` y `docs/preview_debug.png`; el script usa configuración temporal y no abre puertos físicos. Las pruebas verifican conversiones, entradas inválidas, escritura confirmada parcialmente, eco TEST, cancelación al desconectar, temporización, aislamiento de COM, teclado, historial y configuración. **No sustituyen una prueba UART física.**
 
 Para una prueba física, conecte un adaptador USB-UART compatible, seleccione su COM y sus parámetros y compruebe una respuesta del dispositivo. Como prueba de bucle local, en un adaptador UART independiente puede unir TX y RX y enviar `48 69` en hexadecimal: debe aparecer TX y después RX con los mismos bytes. No se ejecutó esta prueba en el entorno de desarrollo porque no había puertos COM disponibles.
 

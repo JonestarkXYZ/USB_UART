@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -177,6 +178,63 @@ class TransportTests(unittest.TestCase):
         self.assertFalse(transport.open(settings))
         self.assertFalse(transport.port.isOpen())
         self.assertEqual(len(errors), 1)
+
+    def test_debug_uses_serial_pipeline_and_echoes_fragmented_bytes(self):
+        transport = SerialTransport()
+        received = []
+        sent = []
+        transport.received.connect(received.append)
+        transport.sent.connect(sent.append)
+        settings = Settings(Path("__missing_test_settings__.json")).data["serial"]
+        with patch.object(transport.physical_port, "open", side_effect=AssertionError("COM físico")), patch.object(transport.physical_port, "write", side_effect=AssertionError("TX físico")):
+            transport.set_debug(True)
+            self.assertTrue(transport.open(settings))
+            payload = bytes(range(256))
+            self.assertTrue(transport.send(payload))
+            self.assertEqual(received, [])
+            self.assertEqual(sent, [])
+            deadline = time.monotonic() + 1
+            while transport.pending_bytes and time.monotonic() < deadline:
+                QTest.qWait(10)
+            self.assertEqual(sent, [payload])
+            self.assertEqual(b"".join(received), payload)
+            self.assertGreater(len(received), 1)
+            self.assertTrue(all(len(chunk) <= 64 for chunk in received))
+            self.assertFalse(transport.physical_port.isOpen())
+            transport.close()
+
+    def test_debug_cancels_pending_echo_on_disconnect_and_reopen(self):
+        transport = SerialTransport()
+        received = []
+        transport.received.connect(received.append)
+        settings = Settings(Path("__missing_test_settings__.json")).data["serial"]
+        transport.set_debug(True)
+        transport.open(settings)
+        transport.send(b"cancelado")
+        transport.close()
+        transport.open(settings)
+        transport.send(b"nuevo")
+        QTest.qWait(50)
+        self.assertEqual(received, [b"nuevo"])
+        self.assertEqual(transport.pending_bytes, 0)
+        transport.close()
+
+    def test_debug_timing_and_data_bits_use_uart_configuration(self):
+        transport = SerialTransport()
+        received = []
+        transport.received.connect(received.append)
+        settings = Settings(Path("__missing_test_settings__.json")).data["serial"]
+        settings.update(baudrate=50, data_bits=7, parity="Par", stop_bits="2")
+        transport.set_debug(True)
+        transport.open(settings)
+        transport.send(b"\xff")
+        # 1 inicio + 7 datos + 1 paridad + 2 parada = 11 bits: 220 ms a 50 baudios.
+        self.assertEqual(transport.virtual_port.timer.interval(), 220)
+        QTest.qWait(30)
+        self.assertEqual(received, [])
+        QTest.qWait(250)
+        self.assertEqual(received, [b"\x7f"])
+        transport.close()
 
 
 class WindowTests(unittest.TestCase):
@@ -393,6 +451,59 @@ class WindowTests(unittest.TestCase):
         self.window._record("RX", b"A\n" * 1100)
         self.assertEqual(self.window.history.document().blockCount(), 1000)
         self.assertEqual(len(self.window.records), 1)
+
+    def test_debug_menu_echoes_and_restores_physical_port_selection(self):
+        self.window.config["serial"]["port"] = "COM6"
+        with patch("window.QSerialPortInfo.availablePorts", side_effect=AssertionError("Enumeración física")), patch.object(self.window.transport.physical_port, "open", side_effect=AssertionError("COM físico")):
+            self.window.debug_action.trigger()
+            self.assertTrue(self.window.transport.is_open())
+            self.assertEqual(self.window.ports.currentData(), "TEST")
+            self.assertFalse(self.window.ports.isEnabled())
+            self.assertIn("DEBUG", self.window.connection_label.text())
+            self.window.input.setText("$STATE")
+            self.window._send()
+            QTest.qWait(50)
+            self.assertEqual([(entry.direction, entry.payload) for entry in self.window.records if entry.direction != "SYS"], [("TX", b"$STATE"), ("RX", b"$STATE")])
+            self.assertEqual(self.window.rx_bytes, self.window.tx_bytes)
+            self.window._save()
+            self.assertTrue(Settings(self.root / "config.json").data["debug"])
+        self.window.debug_action.trigger()
+        self.assertFalse(self.window.transport.is_open())
+        self.assertIs(self.window.transport.port, self.window.transport.physical_port)
+        self.assertEqual(self.window.config["serial"]["port"], "COM6")
+
+    def test_debug_allows_uart_settings_when_disconnected(self):
+        self.window.debug_action.trigger()
+        self.window.connect_button.click()
+        self.assertFalse(self.window.transport.is_open())
+        self.assertTrue(self.window.baudrate.isEnabled())
+        self.assertFalse(self.window.ports.isEnabled())
+        self.window.baudrate.setCurrentText("9600")
+        self.window.data_bits.setCurrentText("7")
+        self.window.connect_button.click()
+        self.assertEqual(self.window.transport.virtual_port._baudrate, 9600)
+        self.assertEqual(self.window.transport.virtual_port._data_bits, 7)
+
+    def test_enabling_debug_closes_previous_physical_connection(self):
+        # Sustituye el dispositivo, sin abrir un COM del usuario.
+        fake = FakePort()
+        self.window.transport.port = fake
+        self.window._connection_changed(True)
+        self.window.debug_action.trigger()
+        self.assertFalse(fake.isOpen())
+        self.assertIs(self.window.transport.port, self.window.transport.virtual_port)
+        self.assertTrue(self.window.transport.is_open())
+        self.assertEqual(fake.output, [])
+
+    def test_saved_debug_starts_test_without_enumerating_or_opening_com(self):
+        self.window.debug_action.trigger()
+        self.window.close()
+        with patch("window.QSerialPortInfo.availablePorts", side_effect=AssertionError("COM enumerado")), patch.object(QSerialPort, "open", side_effect=AssertionError("COM abierto")):
+            self.window = MainWindow(self.root)
+            self.window.port_timer.stop()
+            self.assertTrue(self.window.debug_action.isChecked())
+            self.assertTrue(self.window.transport.is_open())
+            self.assertIs(self.window.transport.port, self.window.transport.virtual_port)
 
 
 if __name__ == "__main__":

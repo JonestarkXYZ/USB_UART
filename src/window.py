@@ -84,6 +84,7 @@ class MainWindow(QMainWindow):
         self.colors = self.themes.get(self.config["view"]["theme"], next(iter(self.themes.values())))
         self.formatters = {}
         self.transport = SerialTransport(self)
+        self.transport.set_debug(self.config["debug"])
         self.save_timer = QTimer(self)
         self.save_timer.setSingleShot(True)
         self.save_timer.setInterval(350)
@@ -112,6 +113,8 @@ class MainWindow(QMainWindow):
             self.setWindowState(self.windowState() | Qt.WindowMaximized)
         if self.settings.error:
             QTimer.singleShot(0, lambda: self._report_error(self.settings.error))
+        if self.config["debug"]:
+            self._toggle_connection()
 
     def _load_themes(self) -> dict:
         """Solo carga paletas JSON completas; evita inyectar estilos arbitrarios."""
@@ -295,6 +298,8 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self._action(file_menu, "Salir", self.close, "Ctrl+Q")
         settings_menu = self.menuBar().addMenu("Configuración")
+        self.debug_action = self._action(settings_menu, "Debug · USB virtual TEST (eco)", self._debug_changed, checked=self.config["debug"])
+        settings_menu.addSeparator()
         self._action(settings_menu, "Actualizar puertos", self._refresh_ports, "F5")
         self._action(settings_menu, "Límite del historial…", self._history_limit)
         self.console_action = self._action(settings_menu, "Mostrar consola al iniciar", self._console_changed, checked=self.config["show_console"])
@@ -380,7 +385,15 @@ class MainWindow(QMainWindow):
         self._render_history()
 
     def _refresh_ports(self) -> None:
-        if self.transport.port.isOpen():
+        if self.transport.is_open():
+            return
+        if self.config["debug"]:
+            # En Debug ni siquiera se enumeran los COM; el destino siempre es TEST.
+            self.ports.blockSignals(True)
+            self.ports.clear()
+            self.ports.addItem("USB virtual · TEST (eco)", "TEST")
+            self.ports.blockSignals(False)
+            self.connect_button.setEnabled(True)
             return
         selected = self.ports.currentData() or self.config["serial"]["port"]
         ports = sorted(QSerialPortInfo.availablePorts(), key=lambda port: port.portName())
@@ -405,7 +418,7 @@ class MainWindow(QMainWindow):
     def _controls_changed(self, *args) -> None:
         """No guarda un baudrate incompleto mientras el usuario lo está escribiendo."""
         serial = self.config["serial"]
-        if self.ports.currentData():
+        if not self.config["debug"] and self.ports.currentData():
             serial["port"] = self.ports.currentData()
         try:
             baudrate = int(self.baudrate.currentText())
@@ -414,14 +427,14 @@ class MainWindow(QMainWindow):
         except ValueError:
             pass
         serial.update(data_bits=int(self.data_bits.currentText()), parity=self.parity.currentText(), stop_bits=self.stop_bits.currentText(), flow_control=self.flow_control.currentText())
-        self.connect_button.setEnabled(self.transport.port.isOpen() or bool(self.ports.currentData()))
+        self.connect_button.setEnabled(self.transport.is_open() or bool(self.ports.currentData()))
         self.save_timer.start()
 
     def _toggle_connection(self) -> None:
-        if self.transport.port.isOpen():
+        if self.transport.is_open():
             self.transport.close()
             return
-        if not self.ports.currentData():
+        if not self.config["debug"] and not self.ports.currentData():
             self._report_error("Seleccione un puerto serie disponible.")
             return
         try:
@@ -435,20 +448,38 @@ class MainWindow(QMainWindow):
         self.transport.open(self.config["serial"])
 
     def _connection_changed(self, connected: bool) -> None:
+        debug = self.config["debug"]
         for widget in (self.ports, self.refresh_button, self.baudrate, self.data_bits, self.parity, self.stop_bits, self.flow_control):
-            widget.setEnabled(not connected)
+            # TEST permite configurar la trama UART antes de conectar, como el COM.
+            widget.setEnabled(not connected and (not debug or widget not in (self.ports, self.refresh_button)))
         self.connect_button.setText("Desconectar" if connected else "Conectar")
+        self.connect_button.setEnabled(connected or debug or bool(self.ports.currentData()))
         self.send_button.setEnabled(connected)
-        self.connection_label.setText(f"Conectado · {self.config['serial']['port']}" if connected else "Desconectado")
+        label = "DEBUG · TEST (eco)" if debug else f"Conectado · {self.config['serial']['port']}"
+        self.connection_label.setText(label if connected else ("DEBUG · Desconectado" if debug else "Desconectado"))
         self.connection_label.setStyleSheet(f"color: {self.colors['rx'] if connected else self.colors['muted']};")
         if connected:
-            self._system(f"Conectado a {self.config['serial']['port']} · {self.config['serial']['baudrate']} baudios")
-            self._set_message("Conectado. Enter o Enviar transmite los datos.")
+            self._system(f"DEBUG · Conectado a USB virtual TEST · {self.config['serial']['baudrate']} baudios · eco UART simulado" if debug else f"Conectado a {self.config['serial']['port']} · {self.config['serial']['baudrate']} baudios")
+            self._set_message("DEBUG: TEST devuelve cada envío como RX." if debug else "Conectado. Enter o Enviar transmite los datos.")
             self.input.setFocus()
         elif getattr(self, "was_connected", False):
             self._system("Puerto desconectado")
             self._set_message("Puerto desconectado.")
         self.was_connected = connected
+
+    def _debug_changed(self) -> None:
+        """Activa el eco interno o restaura los COM sin abrir un dispositivo automáticamente."""
+        enabled = self.debug_action.isChecked()
+        self.config["debug"] = enabled
+        self.transport.set_debug(enabled)
+        self.port_signature = None
+        self._refresh_ports()
+        self._connection_changed(False)
+        if enabled:
+            self._toggle_connection()
+        else:
+            self._set_message("Debug desactivado. Seleccione un COM y pulse Conectar.")
+        self.save_timer.start()
 
     def _set_input_mode(self, *args) -> None:
         mode = self.tx_mode.currentText()
@@ -685,7 +716,7 @@ class MainWindow(QMainWindow):
         self.colors = self.themes[name]
         self.config["view"]["theme"] = name
         self._apply_theme()
-        self.connection_label.setStyleSheet(f"color: {self.colors['rx'] if self.transport.port.isOpen() else self.colors['muted']};")
+        self.connection_label.setStyleSheet(f"color: {self.colors['rx'] if self.transport.is_open() else self.colors['muted']};")
         self.save_timer.start()
 
     def _console_changed(self) -> None:

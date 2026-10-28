@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
@@ -51,6 +52,21 @@ def main() -> None:
             if not window.grab().save(str(path)):
                 raise OSError(f"No se pudo guardar {path}")
             print(path)
+        # Verifica también una conexión TEST real de la aplicación, con su eco asíncrono.
+        window._change_theme("Oscuro")
+        window._clear_history()
+        window.debug_action.trigger()
+        window.line_ending.setCurrentText("CRLF")
+        window.input.setText("Prueba UART TEST: 0123456789")
+        window._send()
+        loop = QEventLoop()
+        QTimer.singleShot(100, loop.quit)
+        loop.exec()
+        app.processEvents()
+        path = ROOT / "docs" / "preview_debug.png"
+        if not window.grab().save(str(path)):
+            raise OSError(f"No se pudo guardar {path}")
+        print(path)
         window.close()
 
 

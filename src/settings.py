@@ -13,6 +13,7 @@ from protocol import ENDINGS, MODES
 
 DEFAULTS = {
     "show_console": False,
+    "debug": False,
     "serial": {"port": "", "baudrate": 115200, "data_bits": 8, "parity": "Ninguna", "stop_bits": "1", "flow_control": "Ninguno"},
     "terminal": {"tx_mode": "UTF-8", "rx_mode": "UTF-8", "line_ending": "Ninguno", "timestamp": "Ambos", "history_limit": 1000, "interpret_controls": False},
     "view": {"theme": "Oscuro", "font_family": "Consolas", "font_size": 11, "bold": False, "italic": False, "word_wrap": True, "autoscroll": True},
@@ -47,8 +48,9 @@ class Settings:
 
     def _validate(self) -> None:
         """Descarta valores fuera de rango antes de entregarlos a Qt."""
-        if type(self.data["show_console"]) is not bool:
-            self.data["show_console"] = DEFAULTS["show_console"]
+        for key in ("show_console", "debug"):
+            if type(self.data[key]) is not bool:
+                self.data[key] = DEFAULTS[key]
         choices = {
             ("serial", "data_bits"): (5, 6, 7, 8),
             ("serial", "parity"): ("Ninguna", "Par", "Impar", "Marca", "Espacio"),
