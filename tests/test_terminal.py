@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from PySide6.QtCore import QObject, Signal, Qt
-from PySide6.QtGui import QValidator
+from PySide6.QtGui import QFontDatabase, QFontMetricsF, QValidator
 from PySide6.QtSerialPort import QSerialPort
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -185,6 +185,11 @@ class WindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+        # Permite comprobar geometría de texto real con el plugin offscreen de Windows.
+        if os.name == "nt":
+            fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+            for name in ("segoeui.ttf", "consola.ttf"):
+                QFontDatabase.addApplicationFont(str(fonts / name))
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -327,6 +332,67 @@ class WindowTests(unittest.TestCase):
                 self.window._send()
         self.assertEqual(len(self.window.send_history["UTF-8"]), 100)
         self.assertEqual(self.window.send_history["UTF-8"][0], "3")
+
+    def test_interpret_fragmented_esp32_reply_and_crlf(self):
+        self.window.timestamp.setCurrentText("Ninguna")
+        self.window.interpret_button.click()
+        self.window._record("TX", b"$STATS\r\n")
+        self.window._record("RX", b"$STATS TX=0 INIT_ERR=52 UART")
+        self.window._record("RX", b"_DROP=0 OUT_DROP=0 TX_QUEUE=0\r")
+        self.window._record("RX", b"\n")
+        self.assertEqual(self.window.history.toPlainText(), "TX  $STATS\nRX  $STATS TX=0 INIT_ERR=52 UART_DROP=0 OUT_DROP=0 TX_QUEUE=0")
+        self.window._record("RX", b"LISTO\r\nOTRA LINEA\n")
+        self.assertTrue(self.window.history.toPlainText().endswith("RX  LISTO\nRX  OTRA LINEA"))
+
+    def test_control_toggle_preserves_bytes_and_literal_backslashes(self):
+        payload = b"A\r\nB\tC\x00 literal \\r\\n"
+        self.window._record("RX", payload)
+        raw_view = self.window.history.toPlainText()
+        self.window.interpret_button.click()
+        interpreted = self.window.history.toPlainText()
+        self.assertIn("B       C\\x00 literal \\r\\n", interpreted)
+        self.assertNotEqual(interpreted, raw_view)
+        self.assertEqual(self.window.records[0].payload, payload)
+        self.window._save()
+        self.assertTrue(Settings(self.root / "config.json").data["terminal"]["interpret_controls"])
+        self.window.interpret_button.click()
+        self.assertEqual(self.window.history.toPlainText(), raw_view)
+
+    def test_cr_and_backspace_protect_prefix_and_handle_unicode(self):
+        self.window.timestamp.setCurrentText("Ninguna")
+        self.window.interpret_button.click()
+        self.window._record("RX", "abcdef\rOK\n😀ab\bZ".encode())
+        self.assertEqual(self.window.history.toPlainText(), "RX  OKcdef\nRX  😀aZ")
+
+    def test_interpret_mode_keeps_hex_and_binary_exact(self):
+        self.window.interpret_button.click()
+        self.window.rx_mode.setCurrentText("Hexadecimal")
+        self.window._record("RX", b"A\r\n")
+        self.assertIn("41 0D 0A", self.window.history.toPlainText())
+        self.window.rx_mode.setCurrentText("Binario")
+        self.assertIn("01000001 00001101 00001010", self.window.history.toPlainText())
+
+    def test_wrapped_lines_align_with_payload_and_follow_font_changes(self):
+        self.window.timestamp.setCurrentText("Ninguna")
+        self.window._record("RX", b"$STATS " + b"TX=0 RX=0 TX_BYTES=0 RX_BYTES=0 " * 15)
+        self.app.processEvents()
+        block = self.window.history.document().firstBlock()
+        layout = block.layout()
+        self.assertGreater(layout.lineCount(), 1)
+        indent = QFontMetricsF(self.window.history.font()).horizontalAdvance("RX  ")
+        self.assertAlmostEqual(block.blockFormat().leftMargin(), indent, delta=0.1)
+        self.assertAlmostEqual(layout.lineAt(1).x() - layout.lineAt(0).x(), indent, delta=1)
+        self.window._zoom(3)
+        self.window.timestamp.setCurrentText("Ambos")
+        prefix = self.window.history.toPlainText().split("$STATS", 1)[0]
+        indent = QFontMetricsF(self.window.history.font()).horizontalAdvance(prefix)
+        self.assertAlmostEqual(self.window.history.document().firstBlock().blockFormat().leftMargin(), indent, delta=0.1)
+
+    def test_interpreted_lines_are_bounded_without_changing_raw_history(self):
+        self.window.interpret_button.click()
+        self.window._record("RX", b"A\n" * 1100)
+        self.assertEqual(self.window.history.document().blockCount(), 1000)
+        self.assertEqual(len(self.window.records), 1)
 
 
 if __name__ == "__main__":

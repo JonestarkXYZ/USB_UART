@@ -35,9 +35,18 @@ Con el foco en el cuadro de envío, **↑** recupera el último texto enviado y 
 
 Binario solo permite `0` y `1`, agrupados automáticamente de ocho en ocho. Hexadecimal solo permite `0–9` y `A–F`, en pares y siempre en mayúsculas. Se puede pegar una secuencia compacta; los caracteres inválidos se rechazan y no se envían bytes incompletos. No se agregan ceros para completar grupos. La entrada binaria/hexadecimal admite hasta 8192 dígitos, y la entrada de texto hasta 32768 caracteres. ASCII rechaza tildes y `ñ`; para esos caracteres use UTF-8.
 
-**Final de envío** añade opcionalmente LF (`0A`), CR (`0D`) o CRLF (`0D 0A`) en cualquiera de los formatos. De forma predeterminada no se añade nada. Los controles recibidos o enviados se muestran como `\r`, `\n`, `\t` y `\x00`; nunca se ejecutan secuencias de terminal ni se interpreta HTML. El decodificador conserva caracteres UTF-8 repartidos entre lecturas; una fila puede indicar una secuencia pendiente hasta recibir los bytes restantes.
+**Final de envío** añade opcionalmente LF (`0A`), CR (`0D`) o CRLF (`0D 0A`) en cualquiera de los formatos. Son bytes reales transmitidos por UART, aunque no sean caracteres imprimibles. De forma predeterminada no se añade nada. En RX, esos bytes proceden del dispositivo remoto; el visor no los agrega.
 
-El historial representa bloques de lectura/escritura, **no mensajes definidos por un protocolo ni un registro por byte**. UART no proporciona límites de mensaje. Un registro TX indica que el controlador confirmó la escritura de esos bytes; no implica que el equipo remoto los haya procesado. Los errores y bytes pendientes al desconectar se informan en la barra inferior. No hay reconexión automática.
+El botón superior **Interpretar controles** cambia la visualización de texto UTF-8/ASCII:
+
+- **Desactivado:** muestra los controles como `\r`, `\n`, `\t` y `\x00`, manteniendo separados los bloques de lectura.
+- **Activado:** LF inicia una nueva línea; CR devuelve el cursor al inicio de los datos, sin sobrescribir RX/TX ni la hora; CRLF produce un solo salto; TAB avanza al siguiente múltiplo de ocho columnas y BS retrocede una posición. CR y BS permiten sobrescribir texto, como en un indicador de progreso. Las lecturas RX consecutivas que continúan una misma línea se unen, incluso si CR y LF llegan por separado. Cada línea lógica nueva conserva su etiqueta RX/TX. Al cambiar de dirección se abre otra fila para mantener el orden del intercambio.
+
+La opción se guarda como `terminal.interpret_controls` en `config.json` y actualiza también el historial existente a partir de los bytes originales. No cambia lo transmitido ni convierte un texto literal `\r\n` en controles. Hexadecimal y binario siempre muestran todos los bytes. Los controles restantes siguen visibles y no se interpreta ANSI ni HTML. El decodificador conserva caracteres UTF-8 repartidos entre lecturas; con interpretación activada espera a completar el carácter antes de mostrarlo.
+
+Las líneas largas se ajustan con **sangría desde el inicio de los datos**: sus continuaciones no invaden la columna RX/TX/hora. La sangría se recalcula al cambiar la fuente, el tamaño o las marcas de tiempo. Se utiliza el formato de párrafo de [QTextBlockFormat](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QTextBlockFormat.html).
+
+El historial conserva bloques de lectura/escritura, **no mensajes definidos por un protocolo ni un registro por byte**. UART no proporciona límites de mensaje. La vista interpretada usa LF para separar líneas. Un registro TX indica que el controlador confirmó la escritura de esos bytes; no implica que el equipo remoto los haya procesado. Los errores y bytes pendientes al desconectar se informan en la barra inferior. No hay reconexión automática.
 
 ## Menús y archivos
 
@@ -45,7 +54,7 @@ El historial representa bloques de lectura/escritura, **no mensajes definidos po
 - **Configuración:** actualizar puertos (`F5`), cambiar el límite del historial, mostrar consola al iniciar y guardar preferencias.
 - **Vista:** fuente, estilo y tamaño (`Ctrl+Shift+F`), aumentar/reducir tamaño, ajuste de línea, desplazamiento automático y temas claro/oscuro. Estas opciones afectan al texto mostrado. La papelera y `Ctrl+L` eliminan el historial y reinician contadores.
 
-El desplazamiento automático sigue las nuevas filas mientras esté al final; al subir para consultar el historial se pausa hasta volver al final. Por defecto se conservan 1000 registros, de hasta 4096 bytes cada uno; al alcanzar el límite se descartan los más antiguos. El límite configurable es de 100 a 10000 registros. Los contadores abarcan la sesión desde el último borrado, incluso si ya se descartaron registros antiguos. Cambiar a binario aumenta el uso de memoria por su representación de ocho dígitos por byte.
+El desplazamiento automático sigue las nuevas filas mientras esté al final; al subir para consultar el historial se pausa hasta volver al final. Por defecto se conservan 1000 registros, de hasta 4096 bytes cada uno; al alcanzar el límite se descartan los más antiguos. El límite configurable es de 100 a 10000 registros y también limita los párrafos visibles, ya que un bloque puede contener muchos LF. Para acotar el coste del visor, una línea interpretada sin terminadores se divide en otra fila si supera 32768 caracteres. Los contadores abarcan la sesión desde el último borrado, incluso si ya se descartaron registros antiguos. Cambiar a binario aumenta el uso de memoria por su representación de ocho dígitos por byte.
 
 Todas las preferencias se guardan en **`config.json`**, incluidas las del lanzador, puerto, UART, formatos, finales de línea, marcas de tiempo, fuente, tema y tamaño de ventana. La escritura es atómica y conserva claves adicionales. Un archivo JSON ilegible se mantiene intacto y se informa del error; hay que corregirlo antes de poder guardar nuevas preferencias. No se guarda el historial automáticamente.
 

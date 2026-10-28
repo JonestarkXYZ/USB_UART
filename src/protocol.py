@@ -43,12 +43,13 @@ def grouped_input(text: str, mode: str) -> str:
 class StreamFormatter:
     """Mantiene UTF-8 incremental: una lectura UART puede cortar un carácter."""
 
-    def __init__(self, mode: str):
+    def __init__(self, mode: str, interpret_controls: bool = False):
         self.mode = mode
+        self.interpret_controls = interpret_controls
         self.decoder = codecs.getincrementaldecoder("utf-8")("backslashreplace")
 
     def format(self, payload: bytes, final: bool = False) -> str:
-        """Hace visibles los controles para que un dato no altere las filas del log."""
+        """Expone solo CR/LF/TAB/BS al visor cuando se solicita interpretarlos."""
         if self.mode == "Hexadecimal":
             return payload.hex(" ").upper()
         if self.mode == "Binario":
@@ -61,7 +62,9 @@ class StreamFormatter:
         visible = []
         for character in text:
             codepoint = ord(character)
-            if codepoint in (0x2028, 0x2029):
+            if self.interpret_controls and character in "\r\n\t\b":
+                visible.append(character)
+            elif codepoint in (0x2028, 0x2029):
                 # Los separadores Unicode también crean bloques en QTextDocument.
                 visible.append(f"\\u{codepoint:04X}")
             elif codepoint < 32 or 127 <= codepoint < 160:

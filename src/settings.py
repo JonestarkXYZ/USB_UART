@@ -14,7 +14,7 @@ from protocol import ENDINGS, MODES
 DEFAULTS = {
     "show_console": False,
     "serial": {"port": "", "baudrate": 115200, "data_bits": 8, "parity": "Ninguna", "stop_bits": "1", "flow_control": "Ninguno"},
-    "terminal": {"tx_mode": "UTF-8", "rx_mode": "UTF-8", "line_ending": "Ninguno", "timestamp": "Ambos", "history_limit": 1000},
+    "terminal": {"tx_mode": "UTF-8", "rx_mode": "UTF-8", "line_ending": "Ninguno", "timestamp": "Ambos", "history_limit": 1000, "interpret_controls": False},
     "view": {"theme": "Oscuro", "font_family": "Consolas", "font_size": 11, "bold": False, "italic": False, "word_wrap": True, "autoscroll": True},
     "window": {"width": 1180, "height": 760, "maximized": False},
 }

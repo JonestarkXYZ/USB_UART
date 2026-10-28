@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPixmap, QTextCharFormat, QTextCursor, QValidator
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontMetricsF, QIcon, QPainter, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor, QValidator
 from PySide6.QtSerialPort import QSerialPortInfo
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QPlainTextEdit,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QTextEdit,
     QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -31,6 +32,7 @@ class Entry:
     timestamp: datetime
     payload: bytes
     message: str = ""
+    continuation: bool = False
 
 
 class ByteValidator(QValidator):
@@ -201,6 +203,12 @@ class MainWindow(QMainWindow):
             options.addWidget(widget)
             widget.currentTextChanged.connect(self._display_changed)
             options.addSpacing(12)
+        self.interpret_button = QPushButton("Interpretar controles")
+        self.interpret_button.setCheckable(True)
+        self.interpret_button.setChecked(terminal["interpret_controls"])
+        self.interpret_button.setToolTip("Interpretar CR (retorno), LF (salto), TAB y BS en texto RX/TX. No modifica los bytes UART ni ejecuta ANSI.")
+        self.interpret_button.toggled.connect(self._display_changed)
+        options.addWidget(self.interpret_button)
         options.addStretch()
         grid.addLayout(options, 2, 0, 1, 7)
         grid.setColumnStretch(0, 1)
@@ -222,7 +230,9 @@ class MainWindow(QMainWindow):
         self.clear_button.clicked.connect(self._clear_history)
         history_header.addWidget(self.clear_button)
         history_layout.addLayout(history_header)
-        self.history = QPlainTextEdit()
+        # QTextEdit respeta la sangría de párrafos; QPlainTextEdit ignora esos márgenes.
+        self.history = QTextEdit()
+        self.history.setAcceptRichText(False)
         self.history.setReadOnly(True)
         self.history.setUndoRedoEnabled(False)
         self.history.setPlaceholderText("Conecte un puerto para recibir datos. Los envíos y las recepciones aparecerán aquí.")
@@ -339,9 +349,10 @@ class MainWindow(QMainWindow):
             QPushButton, QToolButton {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 5px; padding: 7px 12px; }}
             QPushButton#primary {{ background: {c['accent']}; color: {c['accent_text']}; border-color: {c['accent']}; font-weight: 600; }}
             QPushButton:hover, QToolButton:hover {{ border-color: {c['accent']}; }}
+            QPushButton:checked {{ border-color: {c['accent']}; color: {c['accent']}; background: {c['input']}; }}
             QPushButton:disabled, QComboBox:disabled {{ color: {c['muted']}; background: {c['background']}; border-color: {c['border']}; }}
             QPushButton#primary:disabled {{ color: {c['muted']}; background: {c['background']}; border-color: {c['border']}; }}
-            QPlainTextEdit {{ background: {c['input']}; border: none; padding: 8px; selection-background-color: {c['accent']}; selection-color: {c['accent_text']}; }}
+            QTextEdit {{ background: {c['input']}; border: none; padding: 8px; selection-background-color: {c['accent']}; selection-color: {c['accent_text']}; }}
             QMenuBar, QMenu {{ background: {c['panel']}; }}
             QMenuBar::item:selected, QMenu::item:selected {{ background: {c['accent']}; color: {c['accent_text']}; }}
             QMenu::item {{ padding: 6px 24px; }}
@@ -364,7 +375,9 @@ class MainWindow(QMainWindow):
         font.setItalic(view["italic"])
         self.history.setFont(font)
         self.input.setFont(font)
-        self.history.setLineWrapMode(QPlainTextEdit.WidgetWidth if view["word_wrap"] else QPlainTextEdit.NoWrap)
+        self.history.setLineWrapMode(QTextEdit.WidgetWidth if view["word_wrap"] else QTextEdit.NoWrap)
+        # La sangría depende de la fuente, el tamaño y la presencia de la hora.
+        self._render_history()
 
     def _refresh_ports(self) -> None:
         if self.transport.port.isOpen():
@@ -517,12 +530,18 @@ class MainWindow(QMainWindow):
             self._set_message(f"En cola TX: {len(payload)} bytes.")
 
     def _display_changed(self, *args) -> None:
-        self.config["terminal"].update(rx_mode=self.rx_mode.currentText(), timestamp=self.timestamp.currentText(), line_ending=self.line_ending.currentText())
+        self.config["terminal"].update(rx_mode=self.rx_mode.currentText(), timestamp=self.timestamp.currentText(), line_ending=self.line_ending.currentText(), interpret_controls=self.interpret_button.isChecked())
         self._render_history()
         self.save_timer.start()
 
     def _reset_formatters(self) -> None:
-        self.formatters = {"RX": StreamFormatter(self.rx_mode.currentText()), "TX": StreamFormatter(self.tx_mode.currentText())}
+        interpret = self.interpret_button.isChecked()
+        self.formatters = {"RX": StreamFormatter(self.rx_mode.currentText(), interpret), "TX": StreamFormatter(self.tx_mode.currentText(), interpret)}
+        self.terminal_direction = None
+        self.terminal_closed = True
+        self.terminal_text = ""
+        self.terminal_column = 0
+        self.terminal_prefix_length = 0
 
     def _record(self, direction: str, payload: bytes) -> None:
         if direction == "RX":
@@ -531,7 +550,7 @@ class MainWindow(QMainWindow):
             self.tx_bytes += len(payload)
         # Acota también cada registro: pegar texto largo no crea una fila ilimitada.
         for offset in range(0, len(payload), 4096):
-            entry = Entry(direction, datetime.now().astimezone(), payload[offset:offset + 4096])
+            entry = Entry(direction, datetime.now().astimezone(), payload[offset:offset + 4096], continuation=offset > 0)
             self.records.append(entry)
             self._append_entry(entry)
         self.counters.setText(f"RX {self.rx_bytes:,} B   ·   TX {self.tx_bytes:,} B")
@@ -542,29 +561,81 @@ class MainWindow(QMainWindow):
         self._append_entry(entry)
 
     def _append_entry(self, entry: Entry) -> None:
-        """Inserta texto plano con color; los datos UART nunca se interpretan como HTML."""
-        if entry.direction == "SYS":
-            # Una nueva conexión no puede completar el UTF-8 pendiente de la anterior.
-            self._reset_formatters()
-            content = entry.message
-        else:
-            content = self.formatters[entry.direction].format(entry.payload)
-            if not content:
-                content = "[secuencia UTF-8 pendiente]"
-        stamp = self.timestamp.currentText()
-        prefix = f"[{entry.timestamp:%H:%M:%S}.{entry.timestamp.microsecond // 1000:03d}] " if stamp == "Ambos" or stamp == entry.direction else ""
-        line = f"{prefix}{entry.direction}  {content}"
+        """Alterna entre bytes visibles y líneas de texto, conservando el registro original."""
         scrollbar = self.history.verticalScrollBar()
         previous_scroll = scrollbar.value()
         follow = self.config["view"]["autoscroll"] and previous_scroll >= scrollbar.maximum() - 2
+        if entry.direction == "SYS":
+            # Una nueva conexión no puede completar el UTF-8 pendiente de la anterior.
+            self._reset_formatters()
+            self._new_history_row(entry, entry.message)
+        else:
+            content = self.formatters[entry.direction].format(entry.payload)
+            mode = self.rx_mode.currentText() if entry.direction == "RX" else self.tx_mode.currentText()
+            if self.interpret_button.isChecked() and mode in ("UTF-8", "ASCII"):
+                # Cada envío es independiente; las lecturas RX sí pueden fragmentar una línea.
+                if entry.direction == "TX" and not entry.continuation:
+                    self.terminal_closed = True
+                self._interpret_text(entry, content)
+            else:
+                self.terminal_closed = True
+                self._new_history_row(entry, content or "[secuencia UTF-8 pendiente]")
+        scrollbar.setValue(scrollbar.maximum() if follow else previous_scroll)
+
+    def _new_history_row(self, entry: Entry, content: str = "") -> None:
+        """Usa sangría francesa: solo la primera línea ocupa la columna RX/TX/hora."""
+        stamp = self.timestamp.currentText()
+        prefix = f"[{entry.timestamp:%H:%M:%S}.{entry.timestamp.microsecond // 1000:03d}] " if stamp == "Ambos" or stamp == entry.direction else ""
+        prefix += f"{entry.direction}  "
         cursor = QTextCursor(self.history.document())
         cursor.movePosition(QTextCursor.End)
         if not self.history.document().isEmpty():
             cursor.insertBlock()
+        margin = QFontMetricsF(self.history.font()).horizontalAdvance(prefix)
+        block_format = QTextBlockFormat()
+        block_format.setLeftMargin(margin)
+        block_format.setTextIndent(-margin)
+        cursor.setBlockFormat(block_format)
         char_format = QTextCharFormat()
         char_format.setForeground(QColor(self.colors.get(entry.direction.lower(), self.colors["muted"])))
-        cursor.insertText(line, char_format)
-        scrollbar.setValue(scrollbar.maximum() if follow else previous_scroll)
+        cursor.insertText(prefix + content, char_format)
+        self.terminal_prefix_length = len(prefix)
+
+    def _interpret_text(self, entry: Entry, content: str) -> None:
+        """Aplica controles al área de datos; un CR nunca sobrescribe la etiqueta RX/TX."""
+        for part in re.split(r"([\r\n\t\b])", content):
+            if not part:
+                continue
+            if self.terminal_closed or self.terminal_direction != entry.direction:
+                self._new_history_row(entry)
+                self.terminal_direction = entry.direction
+                self.terminal_text = ""
+                self.terminal_column = 0
+                self.terminal_closed = False
+            if part == "\r":
+                self.terminal_column = 0
+            elif part == "\n":
+                # Pospone crear la siguiente fila: CRLF final no agrega filas vacías.
+                self.terminal_closed = True
+            elif part == "\b":
+                self.terminal_column = max(0, self.terminal_column - 1)
+            else:
+                if part == "\t":
+                    part = " " * (8 - self.terminal_column % 8)
+                # Acota líneas sin terminadores para no acumular un bloque ilimitado.
+                if len(self.terminal_text) + len(part) > 32768:
+                    self._new_history_row(entry)
+                    self.terminal_text = ""
+                    self.terminal_column = 0
+                column = self.terminal_column
+                self.terminal_text = self.terminal_text[:column] + part + self.terminal_text[column + len(part):]
+                self.terminal_column += len(part)
+                cursor = QTextCursor(self.history.document().lastBlock())
+                cursor.setPosition(cursor.block().position() + self.terminal_prefix_length)
+                cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+                char_format = QTextCharFormat()
+                char_format.setForeground(QColor(self.colors[entry.direction.lower()]))
+                cursor.insertText(self.terminal_text, char_format)
 
     def _render_history(self) -> None:
         if not hasattr(self, "history"):
