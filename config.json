@@ -1,7 +1,7 @@
 {
   "show_console": false,
   "serial": {
-    "port": "COM3",
+    "port": "COM6",
     "baudrate": 115200,
     "data_bits": 8,
     "parity": "Ninguna",
@@ -11,7 +11,7 @@
   "terminal": {
     "tx_mode": "UTF-8",
     "rx_mode": "UTF-8",
-    "line_ending": "Ninguno",
+    "line_ending": "CRLF",
     "timestamp": "Ninguna",
     "history_limit": 1000
   },

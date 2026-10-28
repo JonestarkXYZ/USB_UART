@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QSize, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPixmap, QTextCharFormat, QTextCursor, QValidator
 from PySide6.QtSerialPort import QSerialPortInfo
 from PySide6.QtSvg import QSvgRenderer
@@ -73,6 +73,10 @@ class MainWindow(QMainWindow):
         self.rx_bytes = 0
         self.tx_bytes = 0
         self.drafts = {mode: "" for mode in MODES}
+        # Historial de entrada independiente del registro RX/TX, acotado por formato.
+        self.send_history = {mode: deque(maxlen=100) for mode in MODES}
+        self.send_history_position = None
+        self.send_history_draft = ""
         self.active_tx_mode = self.config["terminal"]["tx_mode"]
         self.themes = self._load_themes()
         self.colors = self.themes.get(self.config["view"]["theme"], next(iter(self.themes.values())))
@@ -236,6 +240,8 @@ class MainWindow(QMainWindow):
         self.input.setMaxLength(32768)
         self.input.setClearButtonEnabled(False)
         self.input.setAccessibleName("Datos para enviar")
+        self.input.installEventFilter(self)
+        self.input.setToolTip("↑: envío anterior · ↓: envío siguiente o recuperar borrador")
         self.input.textEdited.connect(self._group_input)
         self.input.returnPressed.connect(self._send)
         row.addWidget(self.input, 1)
@@ -433,6 +439,8 @@ class MainWindow(QMainWindow):
 
     def _set_input_mode(self, *args) -> None:
         mode = self.tx_mode.currentText()
+        self.send_history_position = None
+        self.send_history_draft = ""
         self.drafts[self.active_tx_mode] = self.input.text()
         self.active_tx_mode = mode
         self.input.setValidator(None)
@@ -445,7 +453,7 @@ class MainWindow(QMainWindow):
             "Binario": "Solo 0 y 1 · Un byte por grupo de 8 bits · Ejemplo: 01001000 01101001",
             "Hexadecimal": "Solo 0–9 y A–F · Un byte por par · Ejemplo: 48 69 FF",
         }
-        self.input_hint.setText(hints[mode])
+        self.input_hint.setText(hints[mode] + " · ↑/↓: historial de envíos")
         self.input.setPlaceholderText({"UTF-8": "Escriba un mensaje…", "ASCII": "Texto ASCII…", "Binario": "01001000 01101001", "Hexadecimal": "48 69 FF"}[mode])
         self.config["terminal"]["tx_mode"] = mode
         self._render_history()
@@ -464,6 +472,33 @@ class MainWindow(QMainWindow):
             width = 8 if mode == "Binario" else 2
             self.input.setCursorPosition(min(len(grouped), before + max(0, before - 1) // width))
 
+    def eventFilter(self, watched, event) -> bool:
+        """Intercepta las flechas solo dentro del cuadro de envío y sin modificadores."""
+        if watched is self.input and event.type() == QEvent.KeyPress and event.modifiers() == Qt.NoModifier:
+            if event.key() in (Qt.Key_Up, Qt.Key_Down):
+                self._browse_send_history(-1 if event.key() == Qt.Key_Up else 1)
+                return True
+        return super().eventFilter(watched, event)
+
+    def _browse_send_history(self, step: int) -> None:
+        """Recupera entradas sin enviarlas ni modificar el historial; conserva el borrador."""
+        history = self.send_history[self.tx_mode.currentText()]
+        if not history:
+            return
+        if self.send_history_position is None:
+            if step > 0:
+                return
+            self.send_history_draft = self.input.text()
+            self.send_history_position = len(history)
+        self.send_history_position = max(0, min(len(history), self.send_history_position + step))
+        if self.send_history_position == len(history):
+            text = self.send_history_draft
+            self.send_history_position = None
+        else:
+            text = history[self.send_history_position]
+        self.input.setText(text)
+        self.input.setCursorPosition(len(text))
+
     def _send(self) -> None:
         if not self.input.text():
             return
@@ -473,6 +508,10 @@ class MainWindow(QMainWindow):
             self._report_error(str(error))
             return
         if self.transport.send(payload):
+            # Solo recuerda envíos aceptados por la cola UART, sin añadir CR/LF al texto.
+            self.send_history[self.tx_mode.currentText()].append(self.input.text())
+            self.send_history_position = None
+            self.send_history_draft = ""
             self.input.clear()
             self.drafts[self.active_tx_mode] = ""
             self._set_message(f"En cola TX: {len(payload)} bytes.")

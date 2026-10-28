@@ -24,6 +24,8 @@ Si el entorno ya está preparado, también se puede iniciar directamente:
 2. Seleccione **Recibir como** y las marcas de tiempo: ninguna, RX, TX o ambos. El historial muestra RX y TX con colores diferentes, hora local con milisegundos y desplazamiento vertical. Cambiar el formato vuelve a representar los bytes conservados.
 3. Escriba abajo y pulse **Enter** o **Enviar**. El selector junto a Enviar determina la codificación de entrada y la visualización TX. Cada formato conserva su borrador durante la sesión. Los borradores no se guardan en disco.
 
+Con el foco en el cuadro de envío, **↑** recupera el último texto enviado y sigue hacia los anteriores; **↓** avanza hacia los más recientes. Al bajar después del último se recupera el borrador que estaba escrito antes de recorrer el historial. Puede editar una entrada recuperada y enviarla otra vez con Enter o Enviar. Se conservan los últimos **100 envíos aceptados por formato durante la sesión**, sin incluir intentos fallidos ni finales de línea añadidos. Recorrerlos no envía nada. La papelera del historial RX/TX no borra estas entradas.
+
 | Formato | Entrada | Bytes transmitidos |
 |---|---|---|
 | UTF-8 | `Hola ñ` | `48 6F 6C 61 20 C3 B1` |

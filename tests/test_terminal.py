@@ -272,6 +272,62 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.input.text(), "AA BB CC DD")
         self.assertEqual(ByteValidator("Hexadecimal").validate("F" * 8193, 8193)[0], QValidator.Invalid)
 
+    def test_send_history_arrows_and_draft(self):
+        # Las flechas recorren en orden, se detienen en los extremos y no transmiten.
+        with patch.object(self.window.transport, "send", return_value=True) as send:
+            for text in ("primero", "segundo", "tercero"):
+                self.window.input.setText(text)
+                QTest.keyClick(self.window.input, Qt.Key_Return)
+            self.window.input.setText("borrador")
+            for expected in ("tercero", "segundo", "primero", "primero"):
+                QTest.keyClick(self.window.input, Qt.Key_Up)
+                self.assertEqual(self.window.input.text(), expected)
+            for expected in ("segundo", "tercero", "borrador", "borrador"):
+                QTest.keyClick(self.window.input, Qt.Key_Down)
+                self.assertEqual(self.window.input.text(), expected)
+            self.assertEqual(send.call_count, 3)
+
+    def test_recalled_entry_can_be_edited_and_sent(self):
+        with patch.object(self.window.transport, "send", return_value=True) as send:
+            self.window.input.setText("LED")
+            self.window._send()
+            QTest.keyClick(self.window.input, Qt.Key_Up)
+            QTest.keyClicks(self.window.input, " ON")
+            QTest.keyClick(self.window.input, Qt.Key_Return)
+            self.assertEqual(send.call_args.args[0], b"LED ON")
+            QTest.keyClick(self.window.input, Qt.Key_Up)
+            self.assertEqual(self.window.input.text(), "LED ON")
+            QTest.keyClick(self.window.input, Qt.Key_Up)
+            self.assertEqual(self.window.input.text(), "LED")
+
+    def test_send_history_is_per_mode_and_survives_log_clear(self):
+        with patch.object(self.window.transport, "send", return_value=True):
+            self.window.input.setText("mensaje")
+            self.window._send()
+            self.window.tx_mode.setCurrentText("Hexadecimal")
+            self.window.input.setText("AA FF")
+            self.window._send()
+        self.window._clear_history()
+        QTest.keyClick(self.window.input, Qt.Key_Up)
+        self.assertEqual(self.window.input.text(), "AA FF")
+        self.window.tx_mode.setCurrentText("UTF-8")
+        QTest.keyClick(self.window.input, Qt.Key_Up)
+        self.assertEqual(self.window.input.text(), "mensaje")
+
+    def test_send_history_skips_failed_send_and_is_bounded(self):
+        self.window.input.setText("sin conexión")
+        with patch.object(self.window.transport, "send", return_value=False):
+            self.window._send()
+        QTest.keyClick(self.window.input, Qt.Key_Up)
+        self.assertEqual(self.window.input.text(), "sin conexión")
+        self.assertFalse(self.window.send_history["UTF-8"])
+        with patch.object(self.window.transport, "send", return_value=True):
+            for index in range(103):
+                self.window.input.setText(str(index))
+                self.window._send()
+        self.assertEqual(len(self.window.send_history["UTF-8"]), 100)
+        self.assertEqual(self.window.send_history["UTF-8"][0], "3")
+
 
 if __name__ == "__main__":
     unittest.main()
